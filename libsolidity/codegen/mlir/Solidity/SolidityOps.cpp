@@ -43,5 +43,13 @@ void ObjectOp::build(OpBuilder &builder, OperationState &state,
       mlir::SymbolTable::getSymbolAttrName(), builder.getStringAttr(name)));
 }
 
+void BlockOp::build(OpBuilder &builder, OperationState &state) {
+  static uint64_t blkId = 0;
+  state.addRegion()->emplaceBlock();
+  state.attributes.push_back(builder.getNamedAttr(
+      mlir::SymbolTable::getSymbolAttrName(),
+      builder.getStringAttr("blk." + llvm::Twine(blkId++))));
+}
+
 #define GET_OP_CLASSES
 #include "Solidity/SolidityOps.cpp.inc"

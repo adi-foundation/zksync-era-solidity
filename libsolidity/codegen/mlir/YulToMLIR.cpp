@@ -57,6 +57,7 @@ class YulToMLIRPass : public ASTWalker {
   mlir::OpBuilder b;
   mlir::ModuleOp mod;
   mlir::sol::ObjectOp currObj;
+  mlir::sol::BlockOp currBlk;
   CharStream const &stream;
   Dialect const &yulDialect;
 
@@ -89,7 +90,15 @@ private:
   template <typename T>
   T lookupSymbol(llvm::StringRef name) {
     // FIXME: We should lookup in the current block and its ancestors
-    return currObj.lookupSymbol<T>(name);
+    mlir::sol::BlockOp blk = currBlk;
+    mlir::Operation *op = nullptr;
+    for (; blk; blk = blk->getParentOfType<mlir::sol::BlockOp>()) {
+      op = blk.lookupSymbol<T>(name);
+      if (op)
+        return llvm::cast<T>(op);
+    }
+    return {};
+    // return currBlk.lookupSymbol<T>(name);
   }
 
   /// Returns the mlir expression for the literal `lit`
@@ -157,7 +166,20 @@ mlir::Value YulToMLIRPass::genExpr(FunctionCall const &call) {
     for (Expression const &arg : call.arguments) {
       args.push_back(genExpr(arg));
     }
-    auto callOp = b.create<mlir::func::CallOp>(loc, callee, args);
+    // TODO: Is there a way to reference the FuncOp and get the builder to
+    // create the symbol reference correctly if the FuncOp (the symbol) is
+    // defined in the "closest" ancestor symbol table other than the "closest"
+    // one?
+    //
+    // auto callOp = b.create<mlir::func::CallOp>(loc, callee, args);
+
+    auto calleeBlk = callee->getParentOfType<mlir::sol::BlockOp>();
+    assert(calleeBlk);
+    mlir::SymbolRefAttr calleeSym = mlir::SymbolRefAttr::get(
+        b.getContext(), calleeBlk.getSymName(),
+        {mlir::FlatSymbolRefAttr::get(callee.getSymNameAttr())});
+    auto callOp = b.create<mlir::func::CallOp>(loc, calleeSym,
+                                               callee.getResultTypes(), args);
     solUnimplementedAssert(callOp.getNumResults() == 1,
                            "TODO: Support multivalue return");
     return callOp.getResult(0);
@@ -204,6 +226,10 @@ void YulToMLIRPass::operator()(FunctionDefinition const &fn) {
 void YulToMLIRPass::operator()(Block const &blk) {
   BuilderHelper h(b);
   mlir::IntegerType i256Ty = b.getIntegerType(256);
+
+  currBlk = b.create<mlir::sol::BlockOp>(getLoc(blk.debugData->nativeLocation));
+  mlir::OpBuilder::InsertionGuard insertGuard(b);
+  b.setInsertionPointToStart(currBlk.getBody());
 
   // "Declare" FuncOps (i.e. create them with an empty region) at this block so
   // that we can lower calls before lowering the functions. The function

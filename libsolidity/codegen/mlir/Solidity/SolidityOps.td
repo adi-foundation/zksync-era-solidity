@@ -58,6 +58,8 @@ def Sol_ContractOp : Sol_Op<"contract", [Symbol, SingleBlock, NoTerminator]> {
 
 // TODO? Move this to a "yul" dialect? Do we need a lot of yul specific ops for
 // a new dialect?
+//
+// ObjectOp defines a symbol table for the block symbols
 def Sol_ObjectOp : Sol_Op<"object", [Symbol, SymbolTable, SingleBlock,
                           NoTerminator]> {
   let summary = "An operation that represents a yul object";
@@ -74,6 +76,25 @@ def Sol_ObjectOp : Sol_Op<"object", [Symbol, SymbolTable, SingleBlock,
 
   let skipDefaultBuilders = 1;
   let builders = [OpBuilder<(ins CArg<"StringRef", "{}">:$name)>];
+}
+
+// BlockOp defines a symbol for resolving symbol references outside its region
+def Sol_BlockOp : Sol_Op<"block", [Symbol, SymbolTable, SingleBlock,
+                                   NoTerminator]> {
+  let summary = "An operation that represents a yul block";
+  let description = [{
+    Example:
+    sol.block {
+      ...
+    }
+  }];
+
+  let arguments = (ins SymbolNameAttr:$sym_name);
+  let regions = (region SizedRegion<1>:$bodyRegion);
+  let assemblyFormat = "$sym_name $bodyRegion attr-dict";
+
+  let skipDefaultBuilders = 1;
+  let builders = [OpBuilder<(ins)>];
 }
 
 // TODO: The op definitions of yul builtins should be auto-generated from
