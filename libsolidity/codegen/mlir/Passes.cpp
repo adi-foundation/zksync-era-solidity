@@ -106,6 +106,7 @@ bool solidity::mlirgen::doJob(JobSpec const &job, mlir::MLIRContext &ctx,
     addMLIRPassesForTgt(passMgr, job.tgt);
     if (mlir::failed(passMgr.run(mod)))
       return false;
+    llvm::outs() << mod;
     mlir::registerLLVMDialectTranslation(ctx);
     std::unique_ptr<llvm::Module> llvmMod =
         mlir::translateModuleToLLVMIR(mod, llvmCtx);

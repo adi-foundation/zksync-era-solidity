@@ -142,6 +142,60 @@ struct DataSizeOpLowering : public OpRewritePattern<sol::DataSizeOp> {
   }
 };
 
+struct CodeCopyOpLowering : public OpRewritePattern<sol::CodeCopyOp> {
+  using OpRewritePattern<sol::CodeCopyOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(sol::CodeCopyOp op,
+                                PatternRewriter &rewriter) const override {
+    mlir::Location loc = op->getLoc();
+    auto mod = op->getParentOfType<ModuleOp>();
+    solidity::mlirgen::BuilderHelper h(rewriter);
+    eravm::BuilderHelper eravmHelper(rewriter);
+
+    assert(!inRuntimeContext(op));
+    Value dstOffset = op.getInp0();
+    Value srcOffset = op.getInp1();
+    Value size = op.getInp2();
+
+    // Generate the destination pointer
+    auto heapAddrSpacePtrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
+                                                         eravm::AddrSpace_Heap);
+    auto dst =
+        rewriter.create<LLVM::IntToPtrOp>(loc, heapAddrSpacePtrTy, dstOffset);
+
+    // Generate the source pointer
+    LLVM::GlobalOp callDataPtrDef = h.getGlobalOp(eravm::GlobCallDataPtr, mod);
+    auto callDataPtrAddr =
+        rewriter.create<LLVM::AddressOfOp>(loc, callDataPtrDef);
+    LLVM::LoadOp callDataPtr = eravmHelper.genLoad(loc, callDataPtrAddr);
+    auto src = rewriter.create<LLVM::GEPOp>(
+        loc,
+        /*resultType=*/
+        LLVM::LLVMPointerType::get(mod.getContext(),
+                                   callDataPtrDef.getAddrSpace()),
+        /*basePtrType=*/rewriter.getIntegerType(eravm::BitLen_Byte),
+        callDataPtr,
+        // FIXME: Does it make sense to have the base ptr type as an opaque ptr?
+        // /*basePtrType=*/callDataPtrDef.getType(), callDataPtr,
+        ValueRange{srcOffset});
+
+    // Generate the memcpy
+    //
+    // FIXME: The generated llvm.intr.memcpy's type is (!llvm.ptr<1>, !llvm.ptr,
+    // i64, i1) -> ().  The second input arg's addrspace is incorrect!
+    Value isVolatile = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getI1Type(), rewriter.getBoolAttr(false));
+    rewriter.create<LLVM::MemcpyOp>(
+        loc, dst, src,
+        // FIXME: Is this necessary?
+        rewriter.create<LLVM::TruncOp>(loc, rewriter.getIntegerType(64), size),
+        isVolatile);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct MLoadOpLowering : public OpRewritePattern<sol::MLoadOp> {
   using OpRewritePattern<sol::MLoadOp>::OpRewritePattern;
 
@@ -523,8 +577,8 @@ struct SolidityDialectLowering
     populateFuncToLLVMConversionPatterns(llTyConv, pats);
     pats.add<ObjectOpLowering, ReturnOpLowering, RevertOpLowering,
              MLoadOpLowering, MStoreOpLowering, DataOffsetOpLowering,
-             DataSizeOpLowering, MemGuardOpLowering, CallValOpLowering>(
-        &getContext());
+             DataSizeOpLowering, CodeCopyOpLowering, MemGuardOpLowering,
+             CallValOpLowering>(&getContext());
 
     ModuleOp mod = getOperation();
     if (failed(applyFullConversion(mod, llConv, std::move(pats))))
